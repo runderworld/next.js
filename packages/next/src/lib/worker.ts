@@ -89,12 +89,12 @@ export class Worker {
           // current process runs on `address.port`
           1 +
           debuggerPortOffset
-        nodeOptions[nodeDebugType] = formatDebugAddress(address)
+        nodeOptions[nodeDebugType] = [formatDebugAddress(address)]
       }
     }
 
     if (enableSourceMaps) {
-      nodeOptions['enable-source-maps'] = true
+      nodeOptions['enable-source-maps'] = [true]
     }
 
     if (isolatedMemory) {

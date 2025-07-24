@@ -243,6 +243,9 @@ export function getFormattedNodeOptionsWithoutInspect() {
 
   return formatNodeOptions(args)
 }
+enum PatchFlags {
+  RunderworldNodeOptions = 'runderworld.node.options.patch'
+}
 
 /**
  * Check if the value is a valid positive integer and parse it. If it's not, it will throw an error.
