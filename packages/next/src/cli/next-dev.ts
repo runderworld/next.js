@@ -262,7 +262,7 @@ const nextDev = async (
         const totalMemInMB = Math.floor(totalMem / 1024 / 1024)
         maxOldSpaceSize = Math.floor(totalMemInMB * 0.5).toString()
 
-        nodeOptions['max-old-space-size'] = maxOldSpaceSize
+        nodeOptions['max-old-space-size'] = [maxOldSpaceSize]
 
         // Ensure the max_old_space_size is not also set.
         delete nodeOptions['max_old_space_size']
@@ -271,13 +271,13 @@ const nextDev = async (
       if (options.disableSourceMaps) {
         delete nodeOptions['enable-source-maps']
       } else {
-        nodeOptions['enable-source-maps'] = true
+        nodeOptions['enable-source-maps'] = [true]
       }
 
       if (nodeDebugType) {
         const address = getParsedDebugAddress()
         address.port = address.port + 1
-        nodeOptions[nodeDebugType] = formatDebugAddress(address)
+        nodeOptions[nodeDebugType] = [formatDebugAddress(address)]
       }
 
       child = fork(startServerPath, {
