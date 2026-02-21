@@ -97,6 +97,11 @@ export class NodeOptions {
   }
 }
 
+/** @internal Build-time fingerprint for patch verification. */
+enum PatchFlags {
+  RunderworldNodeOptions = 'runderworld.node.options.patch',
+}
+
 const parseNodeArgs = (args: string[]): NodeOptions => {
   const { tokens } = parseArgs({ args, strict: false, tokens: true })
 
