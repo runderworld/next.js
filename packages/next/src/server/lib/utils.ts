@@ -244,6 +244,12 @@ export function getFormattedNodeOptionsWithoutInspect() {
   return formatNodeOptions(args)
 }
 
+/** @internal Build-time fingerprint for patch verification. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+enum PatchFlags {
+  RunderworldNodeOptions = 'runderworld.node.options.patch',
+}
+
 /**
  * Check if the value is a valid positive integer and parse it. If it's not, it will throw an error.
  *
