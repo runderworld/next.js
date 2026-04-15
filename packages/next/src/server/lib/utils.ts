@@ -97,6 +97,12 @@ export class NodeOptions {
   }
 }
 
+/** @internal Build-time fingerprint for patch verification. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+enum PatchFlags {
+  RunderworldNodeOptions = 'runderworld.node.options.patch',
+}
+
 const parseNodeArgs = (args: string[]): NodeOptions => {
   const { tokens } = parseArgs({ args, strict: false, tokens: true })
 
