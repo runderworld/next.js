@@ -11,51 +11,132 @@ export function printAndExit(message: string, code = 1) {
   return process.exit(code)
 }
 
-export type NodeOptions = Record<string, string | boolean | undefined>
+/**
+ * Parsed representation of NODE_OPTIONS that preserves the original dash
+ * prefix (`-` vs `--`) via `rawName` keys and supports repeated options
+ * (e.g. `-r a.js -r b.js`) by storing values in arrays.
+ */
+export type NodeOptionValues = Record<string, Array<string | boolean>>
+
+/**
+ * A mutable wrapper around parsed NODE_OPTIONS.
+ *
+ * Internally options are keyed by their *rawName* (e.g. `"--require"`, `"-r"`)
+ * and each key maps to an array of values so that repeated options like
+ * `-r a.js -r b.js` are preserved.
+ *
+ * The helper methods accept a *bare* name (e.g. `"inspect"`) and will match
+ * any rawName variant (`"--inspect"`, `"-inspect"`, etc.).  When *setting* a
+ * value the long-form `"--<name>"` is used by default.
+ */
+export class NodeOptions {
+  private data: NodeOptionValues
+
+  constructor(data: NodeOptionValues = {}) {
+    this.data = { ...data }
+  }
+
+  /** Return the *first* value for the given bare option name, or `undefined`. */
+  get(name: string): string | boolean | undefined {
+    const key = this.findKey(name)
+    return key ? this.data[key]?.[0] : undefined
+  }
+
+  /** Return *all* values for the given bare option name. */
+  getAll(name: string): Array<string | boolean> | undefined {
+    const key = this.findKey(name)
+    return key ? this.data[key] : undefined
+  }
+
+  /** Return whether an option with the given bare name exists. */
+  has(name: string): boolean {
+    return this.findKey(name) !== undefined
+  }
+
+  /**
+   * Set (or replace) a single value for the given bare option name.
+   * Uses the long-form `"--<name>"` key.
+   */
+  set(name: string, value: string | boolean): void {
+    const key = this.findKey(name) ?? `--${name}`
+    this.data[key] = [value]
+  }
+
+  /** Delete all values for the given bare option name. */
+  delete(name: string): void {
+    const key = this.findKey(name)
+    if (key) delete this.data[key]
+  }
+
+  /** Return the underlying raw data (for serialization / iteration). */
+  raw(): NodeOptionValues {
+    return this.data
+  }
+
+  /** Shallow-clone this instance. */
+  clone(): NodeOptions {
+    const cloned: NodeOptionValues = {}
+    for (const [k, v] of Object.entries(this.data)) {
+      cloned[k] = [...v]
+    }
+    return new NodeOptions(cloned)
+  }
+
+  // ── private ──────────────────────────────────────────────────────────
+
+  /** Find the rawName key that matches a bare name (e.g. "inspect" → "--inspect"). */
+  private findKey(name: string): string | undefined {
+    // Fast path: try long-form first, then short single-dash.
+    if (`--${name}` in this.data) return `--${name}`
+    if (`-${name}` in this.data) return `-${name}`
+    // Exhaustive fallback – handles edge cases.
+    for (const key of Object.keys(this.data)) {
+      if (key.replace(/^-{1,2}/, '') === name) return key
+    }
+    return undefined
+  }
+}
 
 const parseNodeArgs = (args: string[]): NodeOptions => {
-  const { values, tokens } = parseArgs({ args, strict: false, tokens: true })
+  const { tokens } = parseArgs({ args, strict: false, tokens: true })
+
+  const parsedValues: NodeOptionValues = {}
 
   // For the `NODE_OPTIONS`, we support arguments with values without the `=`
   // sign. We need to parse them manually.
-  let orphan = null
   for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i]
+    const left = tokens[i]
+    const right = tokens[i + 1]
 
-    if (token.kind === 'option-terminator') {
+    if (left.kind === 'option-terminator') {
       break
     }
 
-    // When we encounter an option, if it's value is undefined, we should check
-    // to see if the following tokens are positional parameters. If they are,
-    // then the option is orphaned, and we can assign it.
-    if (token.kind === 'option') {
-      orphan = typeof token.value === 'undefined' ? token : null
+    if (left.kind === 'positional') {
       continue
     }
 
-    // If the token isn't a positional one, then we can't assign it to the found
-    // orphaned option.
-    if (token.kind !== 'positional') {
-      orphan = null
-      continue
-    }
+    parsedValues[left.rawName] ||= []
 
-    // If we don't have an orphan, then we can skip this token.
-    if (!orphan) {
-      continue
-    }
-
-    // If the token is a positional one, and it has a value, so add it to the
-    // values object. If it already exists, append it with a space.
-    if (orphan.name in values && typeof values[orphan.name] === 'string') {
-      values[orphan.name] += ` ${token.value}`
-    } else {
-      values[orphan.name] = token.value
+    // Once we identify an option, there can be an optional value, either passed
+    // explicitly to it, `--token=value` or as the following positional token,
+    // i.e. `--token value`
+    if (left.kind === 'option') {
+      if (left.value) {
+        // Inline value via `=`, e.g. `--inspect=1234`
+        parsedValues[left.rawName].push(left.value)
+      } else if (right?.kind === 'positional') {
+        // Space-separated value, e.g. `--inspect 1234` or `-r ./file.js`
+        parsedValues[left.rawName].push(right.value)
+        i++
+      } else {
+        // Boolean flag, e.g. `--inspect` with no value
+        parsedValues[left.rawName].push(true)
+      }
     }
   }
 
-  return values
+  return new NodeOptions(parsedValues)
 }
 
 /**
@@ -181,61 +262,56 @@ const EXEC_ARGV_ONLY_OPTIONS = new Set([
   'experimental-inspector-network-resource',
 ])
 
-function formatArg(
-  key: string,
-  value: string | boolean | undefined
-): string | null {
-  if (value === true) {
-    return `--${key}`
-  }
-
-  if (value) {
-    return `--${key}=${
-      // Values with spaces need to be quoted. We use JSON.stringify to
-      // also escape any nested quotes.
-      value.includes(' ') && !value.startsWith('"')
-        ? JSON.stringify(value)
-        : value
-    }`
-  }
-
-  return null
-}
-
 /**
  * Stringify the arguments to be used in a command line. It will ignore any
  * argument that has a value of `undefined`. Options that are not allowed in
  * NODE_OPTIONS are returned separately as execArgv.
  *
- * @param args The arguments to be stringified.
+ * @param nodeOptions The NodeOptions instance to be stringified.
  * @returns An object with `nodeOptions` string and `execArgv` array.
  */
-export function formatNodeOptions(
-  args: Record<string, string | boolean | undefined>
-): { nodeOptions: string; execArgv: string[] } {
+export function formatNodeOptions(nodeOptions: NodeOptions): {
+  nodeOptions: string
+  execArgv: string[]
+} {
   const nodeOptionsParts: string[] = []
   const execArgv: string[] = []
 
-  for (const [key, value] of Object.entries(args)) {
-    const formatted = formatArg(key, value)
-    if (formatted === null) continue
+  for (const [key, values] of Object.entries(nodeOptions.raw())) {
+    const bareName = key.replace(/^-{1,2}/, '')
 
-    if (EXEC_ARGV_ONLY_OPTIONS.has(key)) {
-      execArgv.push(formatted)
-    } else {
-      nodeOptionsParts.push(formatted)
+    for (const value of values) {
+      let formatted: string | null = null
+
+      if (value === true) {
+        formatted = key
+      } else if (value) {
+        // Values with spaces need to be quoted. We use JSON.stringify to
+        // also escape any nested quotes.
+        const encodedValue =
+          value.includes(' ') && !value.startsWith('"')
+            ? JSON.stringify(value)
+            : value
+
+        formatted = `${key}${key.startsWith('--') ? '=' : ' '}${encodedValue}`
+      }
+
+      if (formatted === null) continue
+
+      if (EXEC_ARGV_ONLY_OPTIONS.has(bareName)) {
+        execArgv.push(formatted)
+      } else {
+        nodeOptionsParts.push(formatted)
+      }
     }
   }
 
   return { nodeOptions: nodeOptionsParts.join(' '), execArgv }
 }
 
-export function getParsedNodeOptions(): Record<
-  string,
-  string | boolean | undefined
-> {
+export function getParsedNodeOptions(): NodeOptions {
   const args = [...process.execArgv, ...getNodeOptionsArgs()]
-  if (args.length === 0) return {}
+  if (args.length === 0) return new NodeOptions()
 
   return parseNodeArgs(args)
 }
@@ -244,18 +320,18 @@ export function getParsedNodeOptions(): Record<
  * Get the node options from the `NODE_OPTIONS` environment variable and parse
  * them into an object without the inspect options.
  *
- * @returns An object with the parsed node options.
+ * @returns A NodeOptions instance with inspect options removed.
  */
-export function getParsedNodeOptionsWithoutInspect() {
+export function getParsedNodeOptionsWithoutInspect(): NodeOptions {
   const args = getNodeOptionsArgs()
-  if (args.length === 0) return {}
+  if (args.length === 0) return new NodeOptions()
 
   const parsed = parseNodeArgs(args)
 
   // Remove inspect options.
-  delete parsed.inspect
-  delete parsed['inspect-brk']
-  delete parsed['inspect_brk']
+  parsed.delete('inspect')
+  parsed.delete('inspect-brk')
+  parsed.delete('inspect_brk')
 
   return parsed
 }
@@ -267,10 +343,10 @@ export function getParsedNodeOptionsWithoutInspect() {
  * @returns A string with the formatted node options.
  */
 export function getFormattedNodeOptionsWithoutInspect() {
-  const args = getParsedNodeOptionsWithoutInspect()
-  if (Object.keys(args).length === 0) return ''
+  const nodeOptions = getParsedNodeOptionsWithoutInspect()
+  if (Object.keys(nodeOptions.raw()).length === 0) return ''
 
-  return formatNodeOptions(args).nodeOptions
+  return formatNodeOptions(nodeOptions).nodeOptions
 }
 
 /**
@@ -295,10 +371,10 @@ export type NodeInspectType = 'inspect' | 'inspect-brk' | undefined
  * Get the debug type from the `NODE_OPTIONS` environment variable.
  */
 export function getNodeDebugType(nodeOptions: NodeOptions): NodeInspectType {
-  if (nodeOptions.inspect) {
+  if (nodeOptions.has('inspect')) {
     return 'inspect'
   }
-  if (nodeOptions['inspect-brk'] || nodeOptions['inspect_brk']) {
+  if (nodeOptions.has('inspect-brk') || nodeOptions.has('inspect_brk')) {
     return 'inspect-brk'
   }
 }
@@ -315,7 +391,8 @@ export function getMaxOldSpaceSize() {
 
   const parsed = parseNodeArgs(args)
 
-  const size = parsed['max-old-space-size'] || parsed['max_old_space_size']
+  const size =
+    parsed.get('max-old-space-size') || parsed.get('max_old_space_size')
   if (!size || typeof size !== 'string') return
 
   return parseInt(size, 10)
